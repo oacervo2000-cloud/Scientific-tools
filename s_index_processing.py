@@ -7,7 +7,7 @@ import sys
 import pandas as pd
 from multiprocessing import Pool, cpu_count
 
-def determine_radial_velocity_with_mask(fname, ispec_dir):
+def determine_radial_velocity_with_mask(fname, ispec_dir, spectral_type="G2"):
     """
     Determina a velocidade radial de um espectro usando o método de correlação cruzada
     com uma máscara de linhas.
@@ -15,6 +15,7 @@ def determine_radial_velocity_with_mask(fname, ispec_dir):
     Parâmetros:
     fname (str): Caminho para o arquivo do espectro (FITS ou txt).
     ispec_dir (str): Caminho para o diretório de instalação do iSpec.
+    spectral_type (str): O tipo espectral da máscara a ser usada (ex: 'G2', 'K0', 'M5').
 
     Retorna:
     tuple: Uma tupla contendo a velocidade radial (rv) e seu erro (rv_err).
@@ -25,8 +26,14 @@ def determine_radial_velocity_with_mask(fname, ispec_dir):
     # Lê o espectro usando a função do iSpec.
     star_spectrum = ispec.read_spectrum(fname)
 
-    # Define o caminho para a máscara de correlação cruzada.
-    mask_file = os.path.join(ispec_dir, "input/linelists/CCF/HARPS_SOPHIE.G2.375_679nm/mask.lst")
+    # Constrói o caminho para a máscara de correlação cruzada com base no tipo espectral.
+    mask_filename = f"HARPS_SOPHIE.{spectral_type}.375_679nm/mask.lst"
+    mask_file = os.path.join(ispec_dir, "input/linelists/CCF", mask_filename)
+
+    # Verifica se o arquivo da máscara existe.
+    if not os.path.exists(mask_file):
+        raise FileNotFoundError(f"Máscara para o tipo espectral '{spectral_type}' não encontrada em: {mask_file}")
+
     ccf_mask = ispec.read_cross_correlation_mask(mask_file)
 
     # Realiza a correlação cruzada para determinar a velocidade radial.
@@ -44,19 +51,12 @@ def determine_radial_velocity_with_mask(fname, ispec_dir):
 def correct_radial_velocity(fname, rv):
     """
     Corrige a velocidade radial de um espectro.
-
-    Parâmetros:
-    fname (str): Caminho para o arquivo do espectro.
-    rv (float): Valor da velocidade radial a ser corrigido.
-
-    Retorna:
-    dict: O espectro com a velocidade radial corrigida.
     """
     star_spectrum = ispec.read_spectrum(fname)
     star_spectrum = ispec.correct_velocity(star_spectrum, rv)
     return star_spectrum
 
-def process_file(fname, ispec_dir):
+def process_file(fname, ispec_dir, spectral_type):
     """
     Processa um único arquivo de espectro (FITS ou TXT) para calcular o índice S.
     """
@@ -68,7 +68,7 @@ def process_file(fname, ispec_dir):
                 bjd = header.get('OHP DRS BJD', 'N/A')
                 star = header.get('OBJNAME', 'N/A')
                 instrumento = 'SOPHIE'
-                rv, rv_err = determine_radial_velocity_with_mask(fname, ispec_dir)
+                rv, rv_err = determine_radial_velocity_with_mask(fname, ispec_dir, spectral_type)
                 spectrum = correct_radial_velocity(fname, rv)
                 wavelength = 10 * spectrum['waveobs']
                 flux = spectrum['flux']
@@ -99,7 +99,7 @@ def process_file(fname, ispec_dir):
     except Exception as e:
         return None, {'file': fname, 'error': str(e)}
 
-def process_spectra_files(directory, ispec_dir):
+def process_spectra_files(directory, ispec_dir, spectral_type):
     """
     Processa todos os arquivos FITS e TXT em um diretório e seus subdiretórios
     em paralelo para calcular o índice S.
@@ -110,11 +110,8 @@ def process_spectra_files(directory, ispec_dir):
             if file.endswith(".fits") or file.endswith(".txt"):
                 files_to_process.append(os.path.join(root, file))
 
-    # Use o número de CPUs disponíveis para o processamento paralelo.
     with Pool(cpu_count()) as pool:
-        # Mapeia a função 'process_file' para cada arquivo a ser processado.
-        # A função 'starmap' é usada para passar múltiplos argumentos para 'process_file'.
-        results = pool.starmap(process_file, [(fname, ispec_dir) for fname in files_to_process])
+        results = pool.starmap(process_file, [(fname, ispec_dir, spectral_type) for fname in files_to_process])
 
     successful_results = [res for res, err in results if res is not None]
     errors = [err for res, err in results if err is not None]
